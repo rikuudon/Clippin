@@ -1,0 +1,57 @@
+# Environment variables and secrets
+.env
+.env*.local
+*.env
+worker/.env
+dashboard/.env
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Output directories & media files
+output/
+worker/output/
+temp/
+*.mp4
+*.mkv
+*.webm
+*.avi
+*.mov
+*.wav
+*.mp3
+
+# Node & Next.js
+node_modules/
+.next/
+out/
+.vercel
+
+# System files
+Thumbs.db
+[Dd]esktop.ini
+.DS_Store
