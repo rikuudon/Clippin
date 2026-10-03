@@ -68,7 +68,7 @@ def sanitize_filename(name: str) -> str:
     return re.sub(r'[\\/*?:"<>| ]', "_", name)[:50].strip("_")
 
 
-def download_youtube_video(url: str, output_dir: Path) -> dict:
+def download_youtube_video(url: str, output_dir: Path, cookies_file: str = None) -> dict:
     """Download video using yt-dlp and extract attribution metadata."""
     import yt_dlp
 
@@ -91,20 +91,65 @@ def download_youtube_video(url: str, output_dir: Path) -> dict:
     print(f" -> Connecting to YouTube: {url}")
     source_target_pattern = str(output_dir / "source.%(ext)s")
 
-    ydl_opts = {
-        # Prefer 1080p/720p MP4 or best available
+    # Determine if cookies are provided via parameter, environment, or file
+    effective_cookie_file = None
+    if cookies_file and Path(cookies_file).exists():
+        effective_cookie_file = str(cookies_file)
+    elif os.getenv("YOUTUBE_COOKIES"):
+        cookie_path = output_dir / "youtube_cookies.txt"
+        with open(cookie_path, "w", encoding="utf-8") as cf:
+            cf.write(os.getenv("YOUTUBE_COOKIES"))
+        effective_cookie_file = str(cookie_path)
+    elif (SCRIPT_DIR / "cookies.txt").exists():
+        effective_cookie_file = str(SCRIPT_DIR / "cookies.txt")
+    elif (REPO_ROOT / "cookies.txt").exists():
+        effective_cookie_file = str(REPO_ROOT / "cookies.txt")
+
+    base_opts = {
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "outtmpl": source_target_pattern,
         "merge_output_format": "mp4",
         "quiet": False,
         "no_warnings": False,
     }
+    if effective_cookie_file:
+        base_opts["cookiefile"] = effective_cookie_file
+        print(f" -> Using YouTube cookies file: {effective_cookie_file}")
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-    except Exception as e:
-        raise RuntimeError(f"yt-dlp failed to download YouTube video: {e}")
+    # Try android/ios player client first (bypasses bot detection in cloud/datacenter runners)
+    strategies = [
+        {
+            "name": "Android/iOS Mobile Client",
+            "opts": {
+                **base_opts,
+                "extractor_args": {"youtube": {"player_client": ["android", "ios"]}},
+            },
+        },
+        {
+            "name": "Standard Web Client",
+            "opts": base_opts,
+        },
+    ]
+
+    last_error = None
+    info = None
+    for strategy in strategies:
+        try:
+            print(f" -> Attempting download using {strategy['name']}...")
+            with yt_dlp.YoutubeDL(strategy["opts"]) as ydl:
+                info = ydl.extract_info(url, download=True)
+            if info:
+                break
+        except Exception as e:
+            last_error = e
+            print(f" -> {strategy['name']} warning: {e}")
+
+    if not info:
+        raise RuntimeError(
+            f"yt-dlp failed to download YouTube video: {last_error}\n"
+            "Tip: In cloud environments (like GitHub Actions), YouTube blocks automated datacenter IPs.\n"
+            "To bypass: Add your browser cookies as a GitHub Secret named 'YOUTUBE_COOKIES'."
+        )
 
     video_id = info.get("id", "yt_video")
     title = info.get("title", "Unknown Title")
@@ -523,6 +568,11 @@ def main():
         help="Root directory for outputs (default: ./output)",
     )
     parser.add_argument(
+        "--cookies",
+        default=None,
+        help="Path to YouTube cookies.txt file",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Force re-running transcription, clip selection, and cutting even if outputs exist",
@@ -542,14 +592,20 @@ def main():
     try:
         if args.url:
             import yt_dlp
-            with yt_dlp.YoutubeDL({"quiet": True}) as ydl:
+            extract_opts = {
+                "quiet": True,
+                "extractor_args": {"youtube": {"player_client": ["android", "ios"]}},
+            }
+            if args.cookies and Path(args.cookies).exists():
+                extract_opts["cookiefile"] = str(args.cookies)
+            with yt_dlp.YoutubeDL(extract_opts) as ydl:
                 try:
                     info = ydl.extract_info(args.url, download=False)
                     vid_id = info.get("id", "yt_video")
                 except Exception:
                     vid_id = sanitize_filename(args.url.split("v=")[-1][:15])
             video_dir = base_output_dir / vid_id
-            metadata = download_youtube_video(args.url, video_dir)
+            metadata = download_youtube_video(args.url, video_dir, cookies_file=args.cookies)
         else:
             metadata = load_local_video(args.file, base_output_dir)
             video_dir = Path(metadata["source_file"]).parent if Path(metadata["source_file"]).parent.name != "output" else base_output_dir / metadata["video_id"]

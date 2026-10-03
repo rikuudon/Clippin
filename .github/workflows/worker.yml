@@ -33,6 +33,11 @@ jobs:
           cache: 'pip'
           cache-dependency-path: 'worker/requirements.txt'
 
+      - name: Setup Deno (for yt-dlp JS runtime)
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
+
       - name: Install FFmpeg
         run: |
           sudo apt-get update
@@ -49,6 +54,7 @@ jobs:
           GEMINI_MODEL: "gemini-3.8-flash"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
         run: |
           python worker/clipper.py --url "${{ inputs.video_url }}" --whisper-model "${{ inputs.whisper_model }}"
 
