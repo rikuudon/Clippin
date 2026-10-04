@@ -592,12 +592,29 @@ def main():
     try:
         if args.url:
             import yt_dlp
+
+            # Resolve cookies if provided via argument, environment variable, or file
+            cookie_file = None
+            if args.cookies and Path(args.cookies).exists():
+                cookie_file = str(args.cookies)
+            elif os.getenv("YOUTUBE_COOKIES"):
+                temp_cookie_path = base_output_dir / "youtube_cookies.txt"
+                temp_cookie_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(temp_cookie_path, "w", encoding="utf-8") as cf:
+                    cf.write(os.getenv("YOUTUBE_COOKIES"))
+                cookie_file = str(temp_cookie_path)
+            elif (SCRIPT_DIR / "cookies.txt").exists():
+                cookie_file = str(SCRIPT_DIR / "cookies.txt")
+            elif (REPO_ROOT / "cookies.txt").exists():
+                cookie_file = str(REPO_ROOT / "cookies.txt")
+
             extract_opts = {
                 "quiet": True,
                 "extractor_args": {"youtube": {"player_client": ["android", "ios"]}},
             }
-            if args.cookies and Path(args.cookies).exists():
-                extract_opts["cookiefile"] = str(args.cookies)
+            if cookie_file:
+                extract_opts["cookiefile"] = cookie_file
+
             with yt_dlp.YoutubeDL(extract_opts) as ydl:
                 try:
                     info = ydl.extract_info(args.url, download=False)
@@ -605,7 +622,7 @@ def main():
                 except Exception:
                     vid_id = sanitize_filename(args.url.split("v=")[-1][:15])
             video_dir = base_output_dir / vid_id
-            metadata = download_youtube_video(args.url, video_dir, cookies_file=args.cookies)
+            metadata = download_youtube_video(args.url, video_dir, cookies_file=cookie_file)
         else:
             metadata = load_local_video(args.file, base_output_dir)
             video_dir = Path(metadata["source_file"]).parent if Path(metadata["source_file"]).parent.name != "output" else base_output_dir / metadata["video_id"]

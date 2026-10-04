@@ -48,6 +48,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r worker/requirements.txt
 
+      - name: Write YouTube Cookies file (if provided)
+        env:
+          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+        if: env.YOUTUBE_COOKIES != ''
+        run: |
+          printf "%s" "$YOUTUBE_COOKIES" > worker/cookies.txt
+
       - name: Run Clipping Worker
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
