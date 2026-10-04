@@ -1,6 +1,6 @@
 # Project Progress: Clippin
 
-## Current Status: Stage 3 Complete & Tested (Ready for Stage 5 Web Dashboard)
+## Current Status: Stage 4 Web Review Dashboard Live & Operational (Next.js Studio)
 
 ---
 
@@ -19,25 +19,27 @@
 - [x] Prepared Supabase PostgreSQL schema, RLS policies, and private bucket definitions in `supabase/schema.sql`.
 - [x] Implemented Stage 3: Direct automated worker sync to Supabase (upserting video record, uploading 9:16 vertical `.mp4` clips to private `clips` storage bucket, and inserting clip records in database).
 - [x] Prepared GitHub Actions manual workflow in `.github/workflows/worker.yml`.
-- [x] Updated `worker/.env.example` with all worker and Supabase configuration variables.
+- [x] Built Stage 4: Next.js Review Dashboard (`/dashboard`) using App Router, TypeScript, and rich Vanilla CSS design tokens.
+- [x] Connected dashboard to Supabase Cloud backend with server-side pre-signed video streaming & attachment download URLs.
+- [x] Implemented full clip curation workflow: live 9:16 video players, virality score badges, hook breakdowns, one-click "Copy Caption" & "Copy Hashtags" buttons, instant "Approve" / "Reject" toggles with optimistic state updates, and an interactive full-screen Theater Modal.
+- [x] Created `dashboard/.env.example` and secured production credentials in `.env.local`.
 
 ---
 
-### Tested
+### Tested & Verified
 - [x] **Local Clipper Pipeline**: Tested on 25-minute YouTube video (`lGcH3n7bfl4`), successfully generating 6 candidate clips.
 - [x] **Metadata Validation (`clips.json`)**: Verified all required fields are present (`start`, `end`, `score`, `hook`, `title`, `reason`, `post_caption`, `hashtags`, `credit_line`).
 - [x] **Stage 2 Dynamic Camera & Multi-Speaker Centering**: Verified on all 6 clips. Kyle centered in clip_05; Nick DiGiovanni, Bayashi, and Max each centered when speaking in clip_06.
 - [x] **Viral Subtitle Verification**: Verified punchy 2-word Hormozi-style subtitles with Arial Black, heavy outline, and neon yellow pop.
 - [x] **Codec Validation**: Verified output clips use H.264 video codec (1080x1920) and AAC audio codec via `ffprobe`.
 - [x] **Stage 3 Supabase Integration**: Verified end-to-end sync with user's Supabase project (`nlbfnrodgwtfhdswkubt`). Video record inserted, all 6 clips uploaded to `clips` bucket, and rows inserted in `public.clips`.
+- [x] **Stage 4 Next.js Build**: Production build (`npm run build`) compiled successfully with Turbopack and zero TypeScript errors.
+- [x] **Stage 4 API Routes**:
+  - `GET /api/clips`: Successfully fetches videos and clips, signs private bucket storage URLs, and computes real-time statistics.
+  - `PATCH /api/clips/[id]`: Verified bidirectional status updates (`ready` -> `approved` -> `ready`) directly syncing to Supabase.
+- [x] **Stage 4 Live Dev Server**: Next.js server actively running on `http://localhost:3000`.
 
 ---
 
-### Untested
-- [ ] **GitHub Actions Runner**: Running `.github/workflows/worker.yml` on GitHub cloud runners with secrets.
-- [ ] **Stage 5 Web Dashboard**: Next.js App Router review dashboard in `/dashboard` (not yet initialized).
-
----
-
-### Next Step
-1. Initialize Stage 5: Next.js App Router review dashboard in `/dashboard` to preview, play, approve, reject, edit captions, and download viral clips.
+### Ready for Next Action
+- The Review Dashboard is running and ready for you to preview, play, approve, and download clips at `http://localhost:3000`.
