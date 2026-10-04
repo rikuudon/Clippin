@@ -437,19 +437,21 @@ button {
   position: relative;
   width: 100%;
   aspect-ratio: 9 / 16;
-  max-height: 480px;
   background: #000000;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .card-video {
   width: 100%;
   height: 100%;
-  object-fit: cover;
-  border-bottom: 1px solid var(--border-subtle);
+  aspect-ratio: 9 / 16;
+  object-fit: contain;
+  background: #000000;
+  display: block;
 }
 
 /* Top Overlays on Video */
@@ -772,41 +774,86 @@ button {
   background: var(--bg-secondary);
   border: 1px solid var(--border-medium);
   border-radius: var(--radius-xl);
-  max-width: 900px;
-  width: 100%;
+  max-width: 1120px;
+  width: 95vw;
+  height: 92vh;
   max-height: 92vh;
   display: flex;
   overflow: hidden;
-  box-shadow: var(--shadow-lg), 0 0 50px rgba(99, 102, 241, 0.2);
+  box-shadow: var(--shadow-lg), 0 0 60px rgba(0, 0, 0, 0.9);
 }
 
-@media (max-width: 768px) {
+@media (max-width: 860px) {
   .modal-container {
     flex-direction: column;
-    max-height: 95vh;
+    max-height: 96vh;
+    height: auto;
     overflow-y: auto;
   }
 }
 
 .modal-video-pane {
   flex: 1;
-  background: #000;
+  background: #050811;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  position: relative;
+  min-width: 0;
+  gap: 12px;
+}
+
+.modal-video-header-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-subtle);
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: #94A3B8;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.phone-mockup-frame {
+  height: 100%;
+  max-height: calc(92vh - 90px);
+  aspect-ratio: 9 / 16;
+  background: #000000;
+  border-radius: 24px;
+  border: 2px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.9), 0 0 0 6px rgba(15, 23, 42, 0.9);
+  overflow: hidden;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 450px;
-  position: relative;
+}
+
+@media (max-width: 860px) {
+  .phone-mockup-frame {
+    max-height: 520px;
+    width: 100%;
+    max-width: 320px;
+  }
 }
 
 .modal-video {
-  max-height: 85vh;
+  width: 100%;
+  height: 100%;
   aspect-ratio: 9 / 16;
-  width: auto;
-  border-radius: var(--radius-md);
+  object-fit: contain;
+  background: #000000;
+  display: block;
 }
 
 .modal-details-pane {
-  width: 380px;
+  width: 420px;
   padding: 28px;
   display: flex;
   flex-direction: column;
@@ -816,7 +863,7 @@ button {
   border-left: 1px solid var(--border-subtle);
 }
 
-@media (max-width: 768px) {
+@media (max-width: 860px) {
   .modal-details-pane {
     width: 100%;
     border-left: none;

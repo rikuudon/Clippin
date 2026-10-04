@@ -347,11 +347,11 @@ export default function DashboardPage() {
                     </div>
                   </div>
 
-                  <div className="video-overlay-bottom">
-                    <div className="framing-indicator">
-                      <span className="indicator-dot" />
-                      Speaker Centered
-                    </div>
+                    <div className="video-overlay-bottom">
+                      <div className="framing-indicator">
+                        <span className="indicator-dot" />
+                        1080×1920 (9:16) • Speaker Tracked
+                      </div>
 
                     <button
                       onClick={() => setSelectedClip(clip)}
@@ -489,15 +489,22 @@ export default function DashboardPage() {
 
             {/* Vertical Video View */}
             <div className="modal-video-pane">
-              {selectedClip.signed_url && (
-                <video
-                  src={selectedClip.signed_url}
-                  controls
-                  autoPlay
-                  playsInline
-                  className="modal-video"
-                />
-              )}
+              <div className="modal-video-header-badge">
+                <span>1080 × 1920 (9:16 Full HD)</span>
+                <span>•</span>
+                <span>Native Vertical Reel</span>
+              </div>
+              <div className="phone-mockup-frame">
+                {selectedClip.signed_url && (
+                  <video
+                    src={selectedClip.signed_url}
+                    controls
+                    autoPlay
+                    playsInline
+                    className="modal-video"
+                  />
+                )}
+              </div>
             </div>
 
             {/* Metadata Pane */}

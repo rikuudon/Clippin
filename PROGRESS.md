@@ -1,45 +1,52 @@
 # Project Progress: Clippin
 
-## Current Status: Stage 4 Web Review Dashboard Live & Operational (Next.js Studio)
+## Current Status: Refinements Verified & Synced (Ready for Option B: GitHub Actions Cloud Worker)
 
 ---
 
-### Done
-- [x] Initialized Git repository structure and comprehensive `.gitignore` (safeguarding `.env`, video binaries, and node_modules).
-- [x] Configured Google Gemini free-tier integration (`gemini-3.8-flash` via official `google-genai` SDK with multi-model fallback).
-- [x] Created `worker/requirements.txt` with dependencies (`google-genai`, `faster-whisper`, `yt-dlp`, `python-dotenv`, `opencv-python`, `httpx`).
-- [x] Created `worker/prompts.py` with viral clip selection criteria, title, hook, viral score, post caption, and hashtags.
-- [x] Implemented `worker/clipper.py` pipeline (video ingestion, transcription, sentence boundary snapping, cutting, and metadata export).
-- [x] Added `post_caption` and `hashtags` fields to `prompts.py`, `clipper.py`, and backfilled `output/lGcH3n7bfl4/clips.json`.
-- [x] Implemented Stage 2: Dynamic multi-shot camera tracking across speaker cuts and focal shifts via OpenCV YuNet ONNX model (`worker/models/face_detection_yunet.onnx`).
-- [x] Implemented Stage 2: Multi-speaker centering catalog and speech turn alignment (Kyle at 0:26 in clip_05; Nick, Bayashi, and Max in clip_06).
-- [x] Implemented Stage 2: Automatic food, product, and B-roll centering (`X = width / 2`) during object showcase moments.
-- [x] Implemented Stage 2: Viral high-retention ASS subtitles (bold Arial Black 88pt, black outline 9, drop shadow 3, fast 2-word punchy phrasing, active word Electric Neon Yellow highlight with 6% scale pop, safe zone MarginV 480).
-- [x] Implemented Stage 2: FFmpeg single-pass dynamic evaluation crop expression with Lanczos scaling to 1080x1920 H.264/AAC.
-- [x] Prepared Supabase PostgreSQL schema, RLS policies, and private bucket definitions in `supabase/schema.sql`.
-- [x] Implemented Stage 3: Direct automated worker sync to Supabase (upserting video record, uploading 9:16 vertical `.mp4` clips to private `clips` storage bucket, and inserting clip records in database).
-- [x] Prepared GitHub Actions manual workflow in `.github/workflows/worker.yml`.
-- [x] Built Stage 4: Next.js Review Dashboard (`/dashboard`) using App Router, TypeScript, and rich Vanilla CSS design tokens.
-- [x] Connected dashboard to Supabase Cloud backend with server-side pre-signed video streaming & attachment download URLs.
-- [x] Implemented full clip curation workflow: live 9:16 video players, virality score badges, hook breakdowns, one-click "Copy Caption" & "Copy Hashtags" buttons, instant "Approve" / "Reject" toggles with optimistic state updates, and an interactive full-screen Theater Modal.
-- [x] Created `dashboard/.env.example` and secured production credentials in `.env.local`.
+### Current State
+1. **Pipeline & Transcription (Stage 1)**: Complete. Whisper transcription snaps on sentence boundaries, cuts clean 30-90s clips, and Gemini AI scores virality with titles, hooks, reasons, captions, and hashtags.
+2. **Multi-Speaker Centering & Framing (Stage 2)**: Complete & Verified.
+   - **Speaker Tracking**: Calibrated exact horizontal coordinates for Max (Left: $X=1350$), Kyle (Right: $X=2700$), Nick DiGiovanni ($X=880$), Bayashi ($X=2850$), and food/product close-ups ($X=1920$ or $X=1500$ when hand-held).
+   - **Fixes Applied**:
+     - `clip_01`: Hook now immediately centers on Max speaking (fixed empty middle wall bug).
+     - `clip_03`: Waffle ice cream showcase at 0:13 centered on both speaker and product (fixed cut-off bug).
+     - `clip_05` & `clip_06`: Confirmed proper framing for Kyle (crispy crust at 0:26), Nick DiGiovanni, and Bayashi.
+   - **Subtitle Formatting Overhaul**:
+     - Scaled font size from `88pt` to `68pt` Arial Black.
+     - Sized safe zone margins to `MarginL: 70`, `MarginR: 70`, `MarginV: 340` with `WrapStyle: 2`.
+     - Zero horizontal clipping or edge cutoff.
+3. **Supabase Cloud Backend (Stage 3)**: Complete & Verified.
+   - PostgreSQL tables (`videos`, `clips`) and private storage bucket (`clips`).
+   - All 6 re-rendered vertical clips (16.4MB - 29.3MB each) uploaded with `upsert: true`.
+   - Real-time pre-signed streaming & attachment download URLs generated on demand.
+4. **Web Review Studio (Stage 4)**: Live & Operational on `http://localhost:3000`.
+   - **Native Video Display**: Removed artificial `max-height: 480px` constraint; card grid and theater modal now maintain true 1080x1920 9:16 vertical resolution and orientation.
+   - **Mobile Device Viewport**: Redesigned Theater Modal with a high-fidelity phone mockup frame and `1080 × 1920 (9:16 Full HD)` format badges.
+   - **Review Workflows**: 1-click caption copy, 1-click hashtag copy, instant optimistic "Approve" / "Reject" toggles, and direct MP4 downloads.
 
 ---
 
-### Tested & Verified
-- [x] **Local Clipper Pipeline**: Tested on 25-minute YouTube video (`lGcH3n7bfl4`), successfully generating 6 candidate clips.
-- [x] **Metadata Validation (`clips.json`)**: Verified all required fields are present (`start`, `end`, `score`, `hook`, `title`, `reason`, `post_caption`, `hashtags`, `credit_line`).
-- [x] **Stage 2 Dynamic Camera & Multi-Speaker Centering**: Verified on all 6 clips. Kyle centered in clip_05; Nick DiGiovanni, Bayashi, and Max each centered when speaking in clip_06.
-- [x] **Viral Subtitle Verification**: Verified punchy 2-word Hormozi-style subtitles with Arial Black, heavy outline, and neon yellow pop.
-- [x] **Codec Validation**: Verified output clips use H.264 video codec (1080x1920) and AAC audio codec via `ffprobe`.
-- [x] **Stage 3 Supabase Integration**: Verified end-to-end sync with user's Supabase project (`nlbfnrodgwtfhdswkubt`). Video record inserted, all 6 clips uploaded to `clips` bucket, and rows inserted in `public.clips`.
-- [x] **Stage 4 Next.js Build**: Production build (`npm run build`) compiled successfully with Turbopack and zero TypeScript errors.
-- [x] **Stage 4 API Routes**:
-  - `GET /api/clips`: Successfully fetches videos and clips, signs private bucket storage URLs, and computes real-time statistics.
-  - `PATCH /api/clips/[id]`: Verified bidirectional status updates (`ready` -> `approved` -> `ready`) directly syncing to Supabase.
-- [x] **Stage 4 Live Dev Server**: Next.js server actively running on `http://localhost:3000`.
+### Completed Action Plan
+- [x] **1. Studio Video Display Overhaul**:
+  - Updated `dashboard/app/globals.css` and `dashboard/app/page.tsx`.
+  - Maintained true 9:16 vertical ratio without artificial `max-height` clipping.
+  - Used `object-fit: contain` and natural vertical sizing so the entire 1080x1920 frame is 100% visible, uncropped, and sharp.
+  - Redesigned Theater Modal with a high-fidelity mobile device viewport frame displaying exact 1080x1920 9:16 orientation and resolution info badge.
+- [x] **2. Speaker Framing & Centering Overhaul**:
+  - Re-mapped `clip_01` catalog so the intro immediately centers on Max speaking on the left rather than the empty wall.
+  - Re-mapped `clip_03` catalog at 0:13 so Max and the waffle ice cream he is holding are centered.
+  - Adjusted ASS subtitle styles: decreased font size from 88pt to 68pt with safe horizontal margins (`MarginL: 70`, `MarginR: 70`) and `MarginV: 340` so text never spills off-screen.
+- [x] **3. Re-render & Supabase Cloud Sync**:
+  - Re-rendered all 6 clips (`clip_01.mp4` through `clip_06.mp4`) with corrected dynamic speaker framing and safe ASS subtitles.
+  - Re-uploaded all 6 updated clips to the private `clips` Supabase storage bucket and verified database rows.
 
 ---
 
-### Ready for Next Action
-- The Review Dashboard is running and ready for you to preview, play, approve, and download clips at `http://localhost:3000`.
+### Future Plans
+- **Stage 5 (Option B - Next Up)**:
+  - Configure GitHub Actions Cloud Worker workflow (`.github/workflows/worker.yml`).
+  - Test cloud-based automated pipeline with GitHub Secrets (`GEMINI_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`).
+  - Achieve $0 100% cloud-automated video repurposing without requiring local machine CPU/GPU.
+- **Stage 6 (Auto-Publishing / Webhooks)**:
+  - Integrate social publishing webhook or one-click export to TikTok / YouTube Shorts / Instagram Reels once clips are marked `approved`.

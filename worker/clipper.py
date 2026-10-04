@@ -519,11 +519,17 @@ def is_video_vertical_1080p(video_path: str) -> bool:
 # Multi-speaker centering catalog for exact speaker & B-roll shots across multi-person scenes
 SPEAKER_SHOTS_CATALOG = {
     "clip_01": [
-        (0.0, 8.5, 1920),
-        (8.5, 16.0, 1920),
-        (16.0, 26.0, 1920),
-        (26.0, 33.0, 1920),
-        (33.0, 56.74, 1920),
+        (0.0, 8.2, 1350),    # Max hook: "Alright, we are starting off with easily 7-11's most iconic food item..."
+        (8.2, 19.5, 1350),   # Max: "feels right starting off with most popular foods... secret gold menu..."
+        (19.5, 20.7, 1920),  # Food sandwich bite close-up
+        (20.7, 24.2, 2700),  # Kyle: "Sorry to my mom, but that's the best egg salad sandwich..."
+        (24.2, 33.0, 1350),  # Max: "bread is impossibly soft and pillowy... I get the hype."
+        (33.0, 35.0, 2700),  # Kyle: "I don't even like egg salad, it's great."
+        (35.0, 46.5, 1350),  # Max: "absolutely phenomenal, but Kyle keep in mind..."
+        (46.5, 48.8, 2700),  # Kyle: "Like wagyu beef or something?"
+        (48.8, 49.8, 1350),  # Max: "You gonna find out."
+        (49.8, 54.0, 2700),  # Kyle: "I'm gonna give it a nine..."
+        (54.0, 56.74, 1350), # Max: "I'm going nine, too... 9.1."
     ],
     "clip_02": [
         (0.0, 6.4, 1350),    # Max
@@ -542,8 +548,9 @@ SPEAKER_SHOTS_CATALOG = {
     "clip_03": [
         (0.0, 4.9, 1350),    # Max
         (4.9, 7.4, 2700),    # Kyle: "That's not a waffle..."
-        (7.4, 16.0, 1350),   # Max
-        (16.0, 25.5, 1920),  # Ice cream crunch ASMR close-up
+        (7.4, 11.5, 1350),   # Max
+        (11.5, 15.5, 1500),  # Max holding waffle towards center (both face & food centered)
+        (15.5, 25.5, 1920),  # Ice cream crunch ASMR close-up
         (25.5, 33.2, 1350),  # Max: "insanely good..."
         (33.2, 35.2, 2700),  # Kyle: "top three ice cream..."
         (35.2, 38.5, 1920),  # ASMR crunch B-roll
@@ -800,11 +807,12 @@ def generate_ass_subtitles(clip_words: list, clip_start: float, output_ass_path:
         "ScriptType: v4.00+",
         "PlayResX: 1080",
         "PlayResY: 1920",
+        "WrapStyle: 2",
         "ScaledBorderAndShadow: yes",
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: Default,Arial Black,88,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,2,0,1,9,3,2,40,40,480,1",
+        "Style: Default,Arial Black,68,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,2,0,1,7,2,2,70,70,340,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
