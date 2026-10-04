@@ -486,36 +486,250 @@ def snap_and_filter_clips(raw_clips: list, segments: list) -> list:
     return accepted_clips
 
 
-def cut_clips_with_ffmpeg(source_file: str, clips: list, output_dir: Path, metadata: dict) -> list:
-    """Cut each clip using FFmpeg and write clips.json."""
+def ensure_face_model(models_dir: Path) -> Path:
+    """Ensure the YuNet face detection ONNX model is present."""
+    models_dir.mkdir(parents=True, exist_ok=True)
+    target_path = models_dir / "face_detection_yunet.onnx"
+    if not target_path.exists():
+        print(" -> Downloading lightweight YuNet face detector model (~230KB)...")
+        import urllib.request
+        url = "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+        urllib.request.urlretrieve(url, target_path)
+    return target_path
+
+
+def get_video_dimensions(video_file: str) -> tuple[int, int]:
+    """Get video width and height using OpenCV."""
+    import cv2
+    cap = cv2.VideoCapture(video_file)
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+    if w > 0 and h > 0:
+        return w, h
+    return 1920, 1080
+
+
+def is_video_vertical_1080p(video_path: str) -> bool:
+    """Check if video is 1080x1920."""
+    w, h = get_video_dimensions(video_path)
+    return w == 1080 and h == 1920
+
+
+def detect_face_center(source_file: str, start_time: float, duration: float, model_path: Path) -> tuple[float, bool]:
+    """Detect average horizontal face center in the clip using YuNet."""
+    import cv2
+    import numpy as np
+
+    try:
+        detector = cv2.FaceDetectorYN.create(str(model_path), "", (320, 320), score_threshold=0.6)
+    except Exception as e:
+        print(f"    [Warning] Could not initialize face detector ({e}). Defaulting to center crop.")
+        w, _ = get_video_dimensions(source_file)
+        return float(w / 2.0), False
+
+    cap = cv2.VideoCapture(source_file)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    start_frame = int(start_time * fps)
+    num_frames = int(duration * fps)
+    step_frames = int(fps * 1.5)  # Sample every 1.5 seconds
+
+    centers = []
+    detector.setInputSize((320, 320))
+    scale_x = w / 320.0
+
+    sample_indices = list(range(start_frame, start_frame + num_frames, max(1, step_frames)))[:25]
+    for frame_idx in sample_indices:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        ret, frame = cap.read()
+        if not ret:
+            break
+        resized = cv2.resize(frame, (320, 320))
+        _, faces = detector.detect(resized)
+        if faces is not None and len(faces) > 0:
+            best_face = max(faces, key=lambda f: f[2] * f[3])
+            fx, fw = best_face[0], best_face[2]
+            cx = (fx + fw / 2.0) * scale_x
+            centers.append(cx)
+
+    cap.release()
+
+    if len(centers) >= max(2, len(sample_indices) * 0.2):
+        median_x = float(np.median(centers))
+        return median_x, True
+    return float(w / 2.0), False
+
+
+def format_ass_time(seconds: float) -> str:
+    """Format seconds into ASS subtitle timestamp format: H:MM:SS.cs"""
+    hrs = int(seconds // 3600)
+    mins = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    cs = int(round((seconds - int(seconds)) * 100))
+    if cs >= 100:
+        secs += 1
+        cs = 0
+    return f"{hrs:d}:{mins:02d}:{secs:02d}.{cs:02d}"
+
+
+def generate_ass_subtitles(clip_words: list, clip_start: float, output_ass_path: Path, max_words_per_phrase: int = 4):
+    """Generate word-by-word animated ASS subtitles for a vertical clip."""
+    lines = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        "PlayResX: 1080",
+        "PlayResY: 1920",
+        "ScaledBorderAndShadow: yes",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+        "Style: Default,Arial,72,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,2,0,1,6,2,2,40,40,360,1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+
+    if not clip_words:
+        with open(output_ass_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        return
+
+    # Normalize relative timestamps inside this clip
+    rel_words = []
+    for w in clip_words:
+        w_text = w.get("word", "").strip().upper()
+        if not w_text:
+            continue
+        w_start = max(0.0, w.get("start", 0.0) - clip_start)
+        w_end = max(w_start + 0.1, w.get("end", 0.0) - clip_start)
+        rel_words.append({"word": w_text, "start": w_start, "end": w_end})
+
+    # Group words into natural phrases
+    phrases = []
+    current_phrase = []
+    for i, w in enumerate(rel_words):
+        current_phrase.append(w)
+        ends_sentence = any(w["word"].endswith(punct) for punct in [".", "!", "?", ","])
+        has_gap = False
+        if i + 1 < len(rel_words):
+            gap = rel_words[i + 1]["start"] - w["end"]
+            if gap > 0.4:
+                has_gap = True
+        if len(current_phrase) >= max_words_per_phrase or ends_sentence or has_gap:
+            phrases.append(current_phrase)
+            current_phrase = []
+    if current_phrase:
+        phrases.append(current_phrase)
+
+    # For each phrase, generate dialogues highlighting the current active word
+    for phrase in phrases:
+        p_start = phrase[0]["start"]
+        p_end = phrase[-1]["end"]
+
+        for idx, active_word in enumerate(phrase):
+            w_start_time = active_word["start"]
+            if idx + 1 < len(phrase):
+                w_end_time = phrase[idx + 1]["start"]
+            else:
+                w_end_time = p_end
+
+            if w_end_time <= w_start_time:
+                w_end_time = w_start_time + 0.15
+
+            start_str = format_ass_time(w_start_time)
+            end_str = format_ass_time(w_end_time)
+
+            text_parts = []
+            for j, w in enumerate(phrase):
+                if j == idx:
+                    text_parts.append(r"{\c&H0000FFFF&}" + w["word"] + r"{\r}")
+                else:
+                    text_parts.append(w["word"])
+
+            dialogue_text = " ".join(text_parts)
+            dialogue_line = f"Dialogue: 0,{start_str},{end_str},Default,,0,0,0,,{dialogue_text}"
+            lines.append(dialogue_line)
+
+    with open(output_ass_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def render_vertical_clip(source_file: str, start_time: float, duration: float, clip_path: Path, ass_path: Path, face_center_x: float, has_face: bool):
+    """Render 1080x1920 vertical video with face tracking crop or blur background and burned-in subtitles."""
+    w, h = get_video_dimensions(source_file)
+    escaped_ass = str(ass_path).replace("\\", "/").replace(":", "\\:")
+
+    if has_face:
+        # Calculate 9:16 crop window centered on speaker face
+        crop_w = int(h * 9 / 16)
+        crop_w = crop_w - (crop_w % 2)
+        crop_x = int(face_center_x - crop_w / 2.0)
+        crop_x = max(0, min(w - crop_w, crop_x))
+        crop_x = crop_x - (crop_x % 2)
+        vf = f"crop={crop_w}:{h}:{crop_x}:0,scale=1080:1920:flags=lanczos,subtitles='{escaped_ass}'"
+    else:
+        # Blurred background layout for faceless / screen recording clips
+        vf = f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg];[0:v]scale=1080:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,subtitles='{escaped_ass}'"
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-ss", str(start_time),
+        "-i", source_file,
+        "-t", str(duration),
+        "-vf", vf,
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "20",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-avoid_negative_ts", "make_zero",
+        str(clip_path),
+    ]
+
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"FFmpeg failed rendering {clip_path.name}:\n{result.stderr[-600:]}")
+
+
+def cut_clips_with_ffmpeg(source_file: str, clips: list, output_dir: Path, metadata: dict, transcript_data: dict = None) -> list:
+    """Render each clip into 9:16 vertical video with face tracking and burned-in subtitles."""
+    models_dir = SCRIPT_DIR / "models"
+    face_model = ensure_face_model(models_dir)
+
+    all_words = transcript_data.get("words", []) if transcript_data else []
     final_clips_data = []
 
     for i, clip in enumerate(clips, 1):
         clip_filename = f"clip_{i:02d}.mp4"
         clip_path = output_dir / clip_filename
+        ass_path = output_dir / f"clip_{i:02d}.ass"
         start_time = clip["start"]
+        end_time = clip["end"]
         duration = clip["duration"]
 
-        print(f" -> Cutting [{i}/{len(clips)}] {clip_filename} ({duration:.1f}s) - \"{clip['title']}\"...")
+        print(f"\n -> Processing [{i}/{len(clips)}] {clip_filename} ({duration:.1f}s) - \"{clip['title']}\"")
 
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-ss", str(start_time),
-            "-i", source_file,
-            "-t", str(duration),
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-crf", "20",
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-avoid_negative_ts", "make_zero",
-            str(clip_path),
-        ]
+        # 1. Extract words belonging to this clip
+        clip_words = [w for w in all_words if start_time <= w.get("start", 0.0) <= end_time]
+        print(f"    * Generating word-by-word subtitles ({len(clip_words)} words)...")
+        generate_ass_subtitles(clip_words, start_time, ass_path)
 
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"FFmpeg failed cutting {clip_filename}:\n{result.stderr}")
+        # 2. Detect speaker face position
+        print(f"    * Analyzing speaker face positioning with YuNet...")
+        face_x, has_face = detect_face_center(source_file, start_time, duration, face_model)
+        if has_face:
+            print(f"    * Face detected at X={face_x:.1f}. Centering 9:16 vertical crop.")
+        else:
+            print(f"    * No face detected. Applying blurred background 9:16 layout.")
+
+        # 3. Render 1080x1920 vertical video with burned-in subtitles
+        print(f"    * Rendering 1080x1920 H.264/AAC with burned-in captions via FFmpeg...")
+        render_vertical_clip(source_file, start_time, duration, clip_path, ass_path, face_x, has_face)
+        print(f"    [OK] Rendered {clip_filename} successfully!")
 
         clip_record = {
             "clip_id": f"clip_{i:02d}",
@@ -530,6 +744,8 @@ def cut_clips_with_ffmpeg(source_file: str, clips: list, output_dir: Path, metad
             "reason": clip["reason"],
             "post_caption": clip.get("post_caption", ""),
             "hashtags": clip.get("hashtags", []),
+            "has_face": has_face,
+            "face_center_x": round(face_x, 1) if has_face else None,
             # Video source attribution
             "source_url": metadata.get("source_url", ""),
             "creator": metadata.get("creator", ""),
@@ -543,7 +759,7 @@ def cut_clips_with_ffmpeg(source_file: str, clips: list, output_dir: Path, metad
     with open(clips_json_path, "w", encoding="utf-8") as f:
         json.dump(final_clips_data, f, indent=2, ensure_ascii=False)
 
-    print(f" -> Successfully saved metadata to: {clips_json_path}")
+    print(f"\n -> Successfully saved metadata to: {clips_json_path}")
     return final_clips_data
 
 
@@ -641,15 +857,16 @@ def main():
         print("!" * 60 + "\n")
         sys.exit(1)
 
-    # Check if all clips are already rendered
+    # Check if all clips are already rendered in 1080x1920 vertical format
     clips_json_path = video_dir / "clips.json"
+    existing_clips = None
     if not args.force and clips_json_path.exists():
         try:
             with open(clips_json_path, "r", encoding="utf-8") as f:
                 existing_clips = json.load(f)
-            if existing_clips and all(Path(c.get("file_path", "")).exists() for c in existing_clips):
+            if existing_clips and all(Path(c.get("file_path", "")).exists() and is_video_vertical_1080p(c.get("file_path", "")) for c in existing_clips):
                 print("\n" + "=" * 60)
-                print(f"[SUCCESS] ALL CLIPS ALREADY RENDERED ({len(existing_clips)} clips found).")
+                print(f"[SUCCESS] ALL CLIPS ALREADY RENDERED IN 1080x1920 ({len(existing_clips)} clips found).")
                 print(f"Destination folder: {video_dir}")
                 for c in existing_clips:
                     print(f"   [{c['clip_id']}] \"{c['title']}\" ({c['duration']}s, Viral Score: {c['score']}/100) -> {c['filename']}")
@@ -677,55 +894,60 @@ def main():
         sys.exit(1)
 
     # --------------------------------------------------------------------------
-    # STEP 3: Viral Clip Selection (Gemini Flash)
+    # STEP 3 & 4: Clip Selection & Boundary Snapping
     # --------------------------------------------------------------------------
-    print("\n" + "=" * 60)
-    print(">>> [STEP 3/5] SELECTING VIRAL CLIPS (Google Gemini)")
-    print("=" * 60)
-    try:
-        raw_clips = select_clips_with_gemini(transcript_data, model_name=args.gemini_model)
-        print(f"[OK] STEP 3 COMPLETE: Gemini selected {len(raw_clips)} candidate segments.")
-    except Exception as e:
-        print("\n" + "!" * 60)
-        print("[FAILED AT STEP 3: GEMINI AI SELECTION]")
-        print(f"Reason: Gemini API request or JSON parsing failed.")
-        print(f"Details: {e}")
-        print("!" * 60 + "\n")
-        sys.exit(1)
+    filtered_clips = None
+    if existing_clips and not args.force:
+        print("\n" + "=" * 60)
+        print(">>> [STEPS 3 & 4] REUSING EXISTING CLIPS (Gemini skipped to save credits)")
+        print("=" * 60)
+        print(f" -> Found {len(existing_clips)} pre-selected clips in clips.json. Upgrading to vertical 9:16.")
+        filtered_clips = existing_clips
+    else:
+        print("\n" + "=" * 60)
+        print(">>> [STEP 3/5] SELECTING VIRAL CLIPS (Google Gemini)")
+        print("=" * 60)
+        try:
+            raw_clips = select_clips_with_gemini(transcript_data, model_name=args.gemini_model)
+            print(f"[OK] STEP 3 COMPLETE: Gemini selected {len(raw_clips)} candidate segments.")
+        except Exception as e:
+            print("\n" + "!" * 60)
+            print("[FAILED AT STEP 3: GEMINI AI SELECTION]")
+            print(f"Reason: Gemini API request or JSON parsing failed.")
+            print(f"Details: {e}")
+            print("!" * 60 + "\n")
+            sys.exit(1)
+
+        print("\n" + "=" * 60)
+        print(">>> [STEP 4/5] SNAPPING SENTENCE BOUNDARIES & RESOLVING OVERLAPS")
+        print("=" * 60)
+        try:
+            filtered_clips = snap_and_filter_clips(raw_clips, transcript_data["segments"])
+            if not filtered_clips:
+                print("\n[Notice] No clips matched the 30-90s non-overlapping criteria. Please try another video.")
+                return
+            print(f"[OK] STEP 4 COMPLETE: {len(filtered_clips)} approved non-overlapping clips (30-90s).")
+        except Exception as e:
+            print("\n" + "!" * 60)
+            print("[FAILED AT STEP 4: SENTENCE SNAPPING]")
+            print(f"Reason: Failed to align clip timestamps with transcript sentences.")
+            print(f"Details: {e}")
+            print("!" * 60 + "\n")
+            sys.exit(1)
 
     # --------------------------------------------------------------------------
-    # STEP 4: Sentence Snapping & Overlap Removal
+    # STEP 5: Vertical 9:16 Video Cutting & Caption Burning (FFmpeg + YuNet + ASS)
     # --------------------------------------------------------------------------
     print("\n" + "=" * 60)
-    print(">>> [STEP 4/5] SNAPPING SENTENCE BOUNDARIES & RESOLVING OVERLAPS")
+    print(">>> [STEP 5/5] RENDERING 9:16 VERTICAL CLIPS WITH ANIMATED CAPTIONS")
     print("=" * 60)
     try:
-        filtered_clips = snap_and_filter_clips(raw_clips, transcript_data["segments"])
-        if not filtered_clips:
-            print("\n[Notice] No clips matched the 30-90s non-overlapping criteria. Please try another video.")
-            return
-        print(f"[OK] STEP 4 COMPLETE: {len(filtered_clips)} approved non-overlapping clips (30-90s).")
+        final_clips = cut_clips_with_ffmpeg(source_video, filtered_clips, video_dir, metadata, transcript_data)
+        print(f"[OK] STEP 5 COMPLETE: All {len(final_clips)} vertical clips successfully rendered.")
     except Exception as e:
         print("\n" + "!" * 60)
-        print("[FAILED AT STEP 4: SENTENCE SNAPPING]")
-        print(f"Reason: Failed to align clip timestamps with transcript sentences.")
-        print(f"Details: {e}")
-        print("!" * 60 + "\n")
-        sys.exit(1)
-
-    # --------------------------------------------------------------------------
-    # STEP 5: Video Cutting (FFmpeg)
-    # --------------------------------------------------------------------------
-    print("\n" + "=" * 60)
-    print(">>> [STEP 5/5] CUTTING VIDEO CLIPS (FFmpeg)")
-    print("=" * 60)
-    try:
-        final_clips = cut_clips_with_ffmpeg(source_video, filtered_clips, video_dir, metadata)
-        print(f"[OK] STEP 5 COMPLETE: All {len(final_clips)} clips successfully cut.")
-    except Exception as e:
-        print("\n" + "!" * 60)
-        print("[FAILED AT STEP 5: CUTTING CLIPS]")
-        print(f"Reason: FFmpeg failed to cut one or more clips.")
+        print("[FAILED AT STEP 5: RENDERING VERTICAL CLIPS]")
+        print(f"Reason: FFmpeg or face detection failed during rendering.")
         print(f"Details: {e}")
         print("!" * 60 + "\n")
         sys.exit(1)
