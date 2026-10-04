@@ -975,6 +975,132 @@ def cut_clips_with_ffmpeg(source_file: str, clips: list, output_dir: Path, metad
     return final_clips_data
 
 
+def sync_to_supabase(metadata: dict, clips: list, output_dir: Path) -> dict:
+    """
+    Sync rendered clips and video records directly to Supabase:
+    1. Inserts or updates the video record in public.videos.
+    2. Uploads rendered 9:16 vertical clips to the private 'clips' bucket.
+    3. Inserts or updates clip records in public.clips.
+    """
+    supabase_url = os.getenv("SUPABASE_URL")
+    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+
+    if not supabase_url or not service_key:
+        return {}
+
+    # Ensure clean API URL
+    if "dashboard/project" in supabase_url:
+        project_ref = supabase_url.rstrip("/").split("/")[-1]
+        supabase_url = f"https://{project_ref}.supabase.co"
+
+    try:
+        import httpx
+    except ImportError:
+        print(" -> [Notice] httpx not installed. Skipping Supabase upload.")
+        return {}
+
+    print("\n" + "=" * 60)
+    print(">>> [STAGE 3] SYNCING CLIPS & METADATA TO SUPABASE")
+    print("=" * 60)
+
+    headers = {
+        "apikey": service_key,
+        "Authorization": f"Bearer {service_key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation"
+    }
+
+    try:
+        with httpx.Client(timeout=120.0) as client:
+            video_id_code = metadata.get("video_id", "unknown_video")
+            check_r = client.get(f"{supabase_url}/rest/v1/videos?youtube_id=eq.{video_id_code}", headers=headers)
+            video_uuid = None
+            if check_r.status_code == 200 and check_r.json():
+                video_uuid = check_r.json()[0]["id"]
+                print(f" -> Found existing Supabase video record: {video_uuid}")
+                client.patch(
+                    f"{supabase_url}/rest/v1/videos?id=eq.{video_uuid}",
+                    headers=headers,
+                    json={"status": "completed", "title": metadata.get("title", ""), "creator": metadata.get("creator", "")}
+                )
+            else:
+                video_payload = {
+                    "youtube_id": video_id_code,
+                    "source_url": metadata.get("source_url", ""),
+                    "title": metadata.get("title", "Unknown Title"),
+                    "creator": metadata.get("creator", "Unknown Creator"),
+                    "credit_line": metadata.get("credit_line", ""),
+                    "status": "completed"
+                }
+                v_res = client.post(f"{supabase_url}/rest/v1/videos", headers=headers, json=video_payload)
+                if v_res.status_code in [200, 201] and v_res.json():
+                    video_uuid = v_res.json()[0]["id"]
+                    print(f" -> Created Supabase video record: {video_uuid}")
+                else:
+                    print(f" -> [Warning] Failed to insert video record: {v_res.text}")
+                    return {}
+
+            for clip in clips:
+                clip_filename = clip["filename"]
+                clip_file_path = output_dir / clip_filename
+                if not clip_file_path.exists():
+                    continue
+
+                storage_path = f"{video_id_code}/{clip_filename}"
+                print(f" -> Uploading {clip_filename} ({clip_file_path.stat().st_size / 1024 / 1024:.1f} MB) to Supabase Storage...")
+
+                with open(clip_file_path, "rb") as f:
+                    file_bytes = f.read()
+
+                upload_headers = {
+                    "apikey": service_key,
+                    "Authorization": f"Bearer {service_key}",
+                    "Content-Type": "video/mp4",
+                    "x-upsert": "true"
+                }
+                up_res = client.post(
+                    f"{supabase_url}/storage/v1/object/clips/{storage_path}",
+                    headers=upload_headers,
+                    content=file_bytes
+                )
+                if up_res.status_code in [200, 201]:
+                    print(f"    [OK] Uploaded to clips/{storage_path}")
+                else:
+                    print(f"    [Warning] Storage upload returned {up_res.status_code}: {up_res.text}")
+
+                clip_id_val = clip["clip_id"]
+                check_clip = client.get(
+                    f"{supabase_url}/rest/v1/clips?video_id=eq.{video_uuid}&clip_id=eq.{clip_id_val}",
+                    headers=headers
+                )
+                clip_payload = {
+                    "video_id": video_uuid,
+                    "clip_id": clip_id_val,
+                    "title": clip.get("title", ""),
+                    "hook": clip.get("hook", ""),
+                    "reason": clip.get("reason", ""),
+                    "score": clip.get("score", 0),
+                    "duration": clip.get("duration", 0.0),
+                    "start_time": clip.get("start", 0.0),
+                    "end_time": clip.get("end", 0.0),
+                    "post_caption": clip.get("post_caption", ""),
+                    "hashtags": clip.get("hashtags", []),
+                    "storage_path": storage_path,
+                    "status": "ready"
+                }
+                if check_clip.status_code == 200 and check_clip.json():
+                    existing_cid = check_clip.json()[0]["id"]
+                    client.patch(f"{supabase_url}/rest/v1/clips?id=eq.{existing_cid}", headers=headers, json=clip_payload)
+                else:
+                    client.post(f"{supabase_url}/rest/v1/clips", headers=headers, json=clip_payload)
+
+            print(f"[OK] STAGE 3 COMPLETE: Successfully synced {len(clips)} clips to Supabase.")
+            return {"video_uuid": video_uuid, "synced_count": len(clips)}
+    except Exception as e:
+        print(f" -> [Warning] Supabase sync encountered an error: {e}")
+        return {}
+
+
 def main():
     parser = argparse.ArgumentParser(description="Clippin Stage 1: Automated Local Video Clipper")
     group = parser.add_mutually_exclusive_group(required=True)
@@ -1163,6 +1289,9 @@ def main():
     try:
         final_clips = cut_clips_with_ffmpeg(source_video, filtered_clips, video_dir, metadata, transcript_data)
         print(f"[OK] STEP 5 COMPLETE: All {len(final_clips)} vertical clips successfully rendered.")
+        
+        # Sync rendered clips & metadata directly to Supabase
+        sync_to_supabase(metadata, final_clips, video_dir)
     except Exception as e:
         print("\n" + "!" * 60)
         print("[FAILED AT STEP 5: RENDERING VERTICAL CLIPS]")
