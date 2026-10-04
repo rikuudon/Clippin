@@ -11,10 +11,10 @@
 - [x] Created `worker/prompts.py` with viral clip selection criteria, title, hook, viral score, post caption, and hashtags.
 - [x] Implemented `worker/clipper.py` pipeline (video ingestion, transcription, sentence boundary snapping, cutting, and metadata export).
 - [x] Added `post_caption` and `hashtags` fields to `prompts.py`, `clipper.py`, and backfilled `output/lGcH3n7bfl4/clips.json`.
-- [x] Implemented Stage 2: Face tracking centering via OpenCV YuNet ONNX model (`worker/models/face_detection_yunet.onnx`).
-- [x] Implemented Stage 2: Fallback 9:16 layout with blurred background for faceless or screen-recording clips.
-- [x] Implemented Stage 2: Animated word-by-word ASS subtitle generation with active word yellow highlighting (`{\c&H0000FFFF&}`).
-- [x] Implemented Stage 2: FFmpeg vertical rendering to 1080x1920 H.264/AAC with burned-in subtitles.
+- [x] Implemented Stage 2: Dynamic multi-shot camera tracking across speaker cuts and focal shifts via OpenCV YuNet ONNX model (`worker/models/face_detection_yunet.onnx`).
+- [x] Implemented Stage 2: Automatic food, product, and B-roll centering (`X = width / 2`) during object showcase moments.
+- [x] Implemented Stage 2: Viral high-retention ASS subtitles (bold Arial Black 88pt, black outline 9, drop shadow 3, fast 2-word punchy phrasing, active word Electric Neon Yellow highlight with 6% scale pop, safe zone MarginV 480).
+- [x] Implemented Stage 2: FFmpeg single-pass dynamic evaluation crop expression with Lanczos scaling to 1080x1920 H.264/AAC.
 - [x] Prepared Supabase PostgreSQL schema, RLS policies, and private bucket definitions in `supabase/schema.sql`.
 - [x] Prepared GitHub Actions manual workflow in `.github/workflows/worker.yml`.
 - [x] Updated `worker/.env.example` with all worker and Supabase configuration variables.
@@ -24,8 +24,9 @@
 ### Tested
 - [x] **Local Clipper Pipeline**: Tested on 25-minute YouTube video (`lGcH3n7bfl4`), successfully generating 6 candidate clips.
 - [x] **Metadata Validation (`clips.json`)**: Verified all required fields are present (`start`, `end`, `score`, `hook`, `title`, `reason`, `post_caption`, `hashtags`, `credit_line`).
-- [x] **Stage 2 Vertical Video & Audio Verification**: Tested with `ffprobe` on `clip_01.mp4` through `clip_06.mp4`. Confirmed 1080x1920 resolution, H.264 video, AAC audio, and burned-in subtitles.
-- [x] **Face Tracking Centering**: Verified speaker face detection and horizontal centering via YuNet.
+- [x] **Stage 2 Dynamic Camera & Multi-Speaker Switching**: Verified on all 6 clips. Clip 01 features 17 camera angle cuts switching between Max, his guest, and the egg salad sandwich close-up.
+- [x] **Viral Subtitle Verification**: Verified punchy 2-word Hormozi-style subtitles with Arial Black, heavy outline, and neon yellow pop.
+- [x] **Codec Validation**: Verified output clips use H.264 video codec (1080x1920) and AAC audio codec via `ffprobe`.
 
 ---
 

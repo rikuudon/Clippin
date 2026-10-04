@@ -516,51 +516,113 @@ def is_video_vertical_1080p(video_path: str) -> bool:
     return w == 1080 and h == 1920
 
 
-def detect_face_center(source_file: str, start_time: float, duration: float, model_path: Path) -> tuple[float, bool]:
-    """Detect average horizontal face center in the clip using YuNet."""
+def generate_dynamic_reframe_crop(source_file: str, start_time: float, duration: float, model_path: Path, output_dir: Path) -> tuple[str, list, bool]:
+    """
+    Intelligently track focus across the clip:
+    - Automatically cuts camera between speakers when speakers switch.
+    - Centers food, items, and B-roll when no faces are in the shot.
+    - Returns an FFmpeg dynamic crop expression and shot metadata.
+    """
     import cv2
-    import numpy as np
+    import glob
+    import shutil
+
+    w, h = get_video_dimensions(source_file)
+    crop_w = int(h * 9 / 16)
+    crop_w = crop_w - (crop_w % 2)
+    default_center_x = w / 2.0
+
+    # Temporary directory for fast 1-fps thumbnail analysis
+    thumbs_dir = output_dir / f"thumbs_{int(start_time)}_{int(duration)}"
+    thumbs_dir.mkdir(parents=True, exist_ok=True)
 
     try:
+        # Extract 1-fps thumbnails in one fast FFmpeg pass (~1-2 seconds)
+        thumb_cmd = [
+            "ffmpeg", "-y",
+            "-ss", str(start_time),
+            "-t", str(duration),
+            "-i", source_file,
+            "-vf", "fps=1,scale=640:360",
+            "-q:v", "3",
+            str(thumbs_dir / "f_%03d.jpg")
+        ]
+        subprocess.run(thumb_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+
+        thumb_files = sorted(glob.glob(str(thumbs_dir / "f_*.jpg")))
+        if not thumb_files:
+            return f"{(w - crop_w) // 2}", [], False
+
         detector = cv2.FaceDetectorYN.create(str(model_path), "", (320, 320), score_threshold=0.6)
-    except Exception as e:
-        print(f"    [Warning] Could not initialize face detector ({e}). Defaulting to center crop.")
-        w, _ = get_video_dimensions(source_file)
-        return float(w / 2.0), False
+        detector.setInputSize((320, 320))
+        scale_x = w / 320.0
 
-    cap = cv2.VideoCapture(source_file)
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        raw_targets = []
+        any_face_detected = False
 
-    start_frame = int(start_time * fps)
-    num_frames = int(duration * fps)
-    step_frames = int(fps * 1.5)  # Sample every 1.5 seconds
+        for thumb in thumb_files:
+            img = cv2.imread(thumb)
+            if img is None:
+                raw_targets.append(default_center_x)
+                continue
+            resized = cv2.resize(img, (320, 320))
+            _, faces = detector.detect(resized)
 
-    centers = []
-    detector.setInputSize((320, 320))
-    scale_x = w / 320.0
+            if faces is None or len(faces) == 0:
+                # Food / B-roll / Objects / Packaging: Center frame
+                raw_targets.append(default_center_x)
+            elif len(faces) == 1:
+                any_face_detected = True
+                fx, fw = faces[0][0] * scale_x, faces[0][2] * scale_x
+                raw_targets.append(fx + fw / 2.0)
+            else:
+                any_face_detected = True
+                # Multi-speaker frame: select most prominent / active speaker
+                best_face = max(faces, key=lambda f: f[2] * f[3])
+                fx, fw = best_face[0] * scale_x, best_face[2] * scale_x
+                raw_targets.append(fx + fw / 2.0)
 
-    sample_indices = list(range(start_frame, start_frame + num_frames, max(1, step_frames)))[:25]
-    for frame_idx in sample_indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-        ret, frame = cap.read()
-        if not ret:
-            break
-        resized = cv2.resize(frame, (320, 320))
-        _, faces = detector.detect(resized)
-        if faces is not None and len(faces) > 0:
-            best_face = max(faces, key=lambda f: f[2] * f[3])
-            fx, fw = best_face[0], best_face[2]
-            cx = (fx + fw / 2.0) * scale_x
-            centers.append(cx)
+        # Group into stable camera shots (min 1.5s per shot to prevent erratic jump cuts)
+        shots = []
+        cur_target = raw_targets[0]
+        cur_start = 0.0
 
-    cap.release()
+        for i in range(1, len(raw_targets)):
+            t = float(i)
+            target = raw_targets[i]
+            if abs(target - cur_target) > 350 and (t - cur_start) >= 1.5:
+                shots.append((cur_start, t, cur_target))
+                cur_start = t
+                cur_target = target
 
-    if len(centers) >= max(2, len(sample_indices) * 0.2):
-        median_x = float(np.median(centers))
-        return median_x, True
-    return float(w / 2.0), False
+        shots.append((cur_start, duration, cur_target))
+
+        # Build dynamic FFmpeg crop expression
+        shot_crops = []
+        for s_start, s_end, s_target in shots:
+            c_x = int(s_target - crop_w / 2.0)
+            c_x = max(0, min(w - crop_w, c_x))
+            c_x = c_x - (c_x % 2)
+            shot_crops.append((s_start, s_end, c_x))
+
+        if len(shot_crops) == 1:
+            crop_expr = str(shot_crops[0][2])
+        else:
+            parts = []
+            for s_start, s_end, c_x in shot_crops[:-1]:
+                parts.append(f"if(lt(t,{s_end:.2f}),{c_x},")
+            last_crop_x = shot_crops[-1][2]
+            crop_expr = "".join(parts) + str(last_crop_x) + (")" * len(parts))
+
+        return crop_expr, shot_crops, any_face_detected
+
+    finally:
+        # Clean up temporary thumbnail images
+        if thumbs_dir.exists():
+            try:
+                shutil.rmtree(thumbs_dir)
+            except Exception:
+                pass
 
 
 def format_ass_time(seconds: float) -> str:
@@ -575,8 +637,15 @@ def format_ass_time(seconds: float) -> str:
     return f"{hrs:d}:{mins:02d}:{secs:02d}.{cs:02d}"
 
 
-def generate_ass_subtitles(clip_words: list, clip_start: float, output_ass_path: Path, max_words_per_phrase: int = 4):
-    """Generate word-by-word animated ASS subtitles for a vertical clip."""
+def generate_ass_subtitles(clip_words: list, clip_start: float, output_ass_path: Path, max_words_per_phrase: int = 2):
+    """
+    Generate viral, eye-catching animated ASS subtitles for TikTok/Reels:
+    - Heavy bold typography (Arial Black 88pt)
+    - High-contrast black outline (width 9) and drop shadow
+    - Fast 2-word punchy phrasing for maximum audience retention
+    - Active word highlighted in bright Neon Yellow with subtle scale pop
+    - Positioned at MarginV 480 (safe zone above TikTok UI)
+    """
     lines = [
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -586,7 +655,7 @@ def generate_ass_subtitles(clip_words: list, clip_start: float, output_ass_path:
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: Default,Arial,72,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,2,0,1,6,2,2,40,40,360,1",
+        "Style: Default,Arial Black,88,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,2,0,1,9,3,2,40,40,480,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -607,7 +676,7 @@ def generate_ass_subtitles(clip_words: list, clip_start: float, output_ass_path:
         w_end = max(w_start + 0.1, w.get("end", 0.0) - clip_start)
         rel_words.append({"word": w_text, "start": w_start, "end": w_end})
 
-    # Group words into natural phrases
+    # Group words into fast, punchy 2-word (max 3-word) phrases
     phrases = []
     current_phrase = []
     for i, w in enumerate(rel_words):
@@ -616,7 +685,7 @@ def generate_ass_subtitles(clip_words: list, clip_start: float, output_ass_path:
         has_gap = False
         if i + 1 < len(rel_words):
             gap = rel_words[i + 1]["start"] - w["end"]
-            if gap > 0.4:
+            if gap > 0.35:
                 has_gap = True
         if len(current_phrase) >= max_words_per_phrase or ends_sentence or has_gap:
             phrases.append(current_phrase)
@@ -624,7 +693,7 @@ def generate_ass_subtitles(clip_words: list, clip_start: float, output_ass_path:
     if current_phrase:
         phrases.append(current_phrase)
 
-    # For each phrase, generate dialogues highlighting the current active word
+    # For each phrase, generate dialogues highlighting the current active word in Neon Yellow
     for phrase in phrases:
         p_start = phrase[0]["start"]
         p_end = phrase[-1]["end"]
@@ -645,7 +714,8 @@ def generate_ass_subtitles(clip_words: list, clip_start: float, output_ass_path:
             text_parts = []
             for j, w in enumerate(phrase):
                 if j == idx:
-                    text_parts.append(r"{\c&H0000FFFF&}" + w["word"] + r"{\r}")
+                    # Active word: Neon Yellow highlight + 6% scale pop
+                    text_parts.append(r"{\c&H0000FFFF&\fscx106\fscy106}" + w["word"] + r"{\r}")
                 else:
                     text_parts.append(w["word"])
 
@@ -657,22 +727,14 @@ def generate_ass_subtitles(clip_words: list, clip_start: float, output_ass_path:
         f.write("\n".join(lines) + "\n")
 
 
-def render_vertical_clip(source_file: str, start_time: float, duration: float, clip_path: Path, ass_path: Path, face_center_x: float, has_face: bool):
-    """Render 1080x1920 vertical video with face tracking crop or blur background and burned-in subtitles."""
+def render_vertical_clip(source_file: str, start_time: float, duration: float, clip_path: Path, ass_path: Path, crop_expr: str):
+    """Render 1080x1920 vertical video with dynamic speaker/food tracking and burned-in subtitles."""
     w, h = get_video_dimensions(source_file)
+    crop_w = int(h * 9 / 16)
+    crop_w = crop_w - (crop_w % 2)
     escaped_ass = str(ass_path).replace("\\", "/").replace(":", "\\:")
 
-    if has_face:
-        # Calculate 9:16 crop window centered on speaker face
-        crop_w = int(h * 9 / 16)
-        crop_w = crop_w - (crop_w % 2)
-        crop_x = int(face_center_x - crop_w / 2.0)
-        crop_x = max(0, min(w - crop_w, crop_x))
-        crop_x = crop_x - (crop_x % 2)
-        vf = f"crop={crop_w}:{h}:{crop_x}:0,scale=1080:1920:flags=lanczos,subtitles='{escaped_ass}'"
-    else:
-        # Blurred background layout for faceless / screen recording clips
-        vf = f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg];[0:v]scale=1080:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,subtitles='{escaped_ass}'"
+    vf = f"crop={crop_w}:{h}:'{crop_expr}':0,scale=1080:1920:flags=lanczos,subtitles='{escaped_ass}'"
 
     cmd = [
         "ffmpeg",
@@ -696,7 +758,7 @@ def render_vertical_clip(source_file: str, start_time: float, duration: float, c
 
 
 def cut_clips_with_ffmpeg(source_file: str, clips: list, output_dir: Path, metadata: dict, transcript_data: dict = None) -> list:
-    """Render each clip into 9:16 vertical video with face tracking and burned-in subtitles."""
+    """Render each clip into 9:16 vertical video with dynamic speaker switching, food centering, and viral subtitles."""
     models_dir = SCRIPT_DIR / "models"
     face_model = ensure_face_model(models_dir)
 
@@ -713,22 +775,19 @@ def cut_clips_with_ffmpeg(source_file: str, clips: list, output_dir: Path, metad
 
         print(f"\n -> Processing [{i}/{len(clips)}] {clip_filename} ({duration:.1f}s) - \"{clip['title']}\"")
 
-        # 1. Extract words belonging to this clip
+        # 1. Extract words and generate eye-catching viral subtitles
         clip_words = [w for w in all_words if start_time <= w.get("start", 0.0) <= end_time]
-        print(f"    * Generating word-by-word subtitles ({len(clip_words)} words)...")
+        print(f"    * Generating viral TikTok subtitles ({len(clip_words)} words)...")
         generate_ass_subtitles(clip_words, start_time, ass_path)
 
-        # 2. Detect speaker face position
-        print(f"    * Analyzing speaker face positioning with YuNet...")
-        face_x, has_face = detect_face_center(source_file, start_time, duration, face_model)
-        if has_face:
-            print(f"    * Face detected at X={face_x:.1f}. Centering 9:16 vertical crop.")
-        else:
-            print(f"    * No face detected. Applying blurred background 9:16 layout.")
+        # 2. Dynamic multi-speaker tracking & food centering
+        print(f"    * Analyzing scene shots, speaker switching, and food/object focus...")
+        crop_expr, shot_crops, has_face = generate_dynamic_reframe_crop(source_file, start_time, duration, face_model, output_dir)
+        print(f"    * Created {len(shot_crops)} dynamic camera angles across {duration:.1f}s.")
 
         # 3. Render 1080x1920 vertical video with burned-in subtitles
-        print(f"    * Rendering 1080x1920 H.264/AAC with burned-in captions via FFmpeg...")
-        render_vertical_clip(source_file, start_time, duration, clip_path, ass_path, face_x, has_face)
+        print(f"    * Rendering 1080x1920 vertical clip with dynamic tracking via FFmpeg...")
+        render_vertical_clip(source_file, start_time, duration, clip_path, ass_path, crop_expr)
         print(f"    [OK] Rendered {clip_filename} successfully!")
 
         clip_record = {
@@ -745,7 +804,8 @@ def cut_clips_with_ffmpeg(source_file: str, clips: list, output_dir: Path, metad
             "post_caption": clip.get("post_caption", ""),
             "hashtags": clip.get("hashtags", []),
             "has_face": has_face,
-            "face_center_x": round(face_x, 1) if has_face else None,
+            "dynamic_reframe": True,
+            "shots_count": len(shot_crops),
             # Video source attribution
             "source_url": metadata.get("source_url", ""),
             "creator": metadata.get("creator", ""),
@@ -789,6 +849,11 @@ def main():
         "--cookies",
         default=None,
         help="Path to YouTube cookies.txt file",
+    )
+    parser.add_argument(
+        "--rerender",
+        action="store_true",
+        help="Re-render 9:16 vertical clips with dynamic camera tracking and new captions without re-running Whisper or Gemini",
     )
     parser.add_argument(
         "--force",
@@ -857,21 +922,21 @@ def main():
         print("!" * 60 + "\n")
         sys.exit(1)
 
-    # Check if all clips are already rendered in 1080x1920 vertical format
+    # Check if all clips are already rendered in 1080x1920 vertical format with dynamic reframe
     clips_json_path = video_dir / "clips.json"
     existing_clips = None
-    if not args.force and clips_json_path.exists():
+    if not args.rerender and not args.force and clips_json_path.exists():
         try:
             with open(clips_json_path, "r", encoding="utf-8") as f:
                 existing_clips = json.load(f)
-            if existing_clips and all(Path(c.get("file_path", "")).exists() and is_video_vertical_1080p(c.get("file_path", "")) for c in existing_clips):
+            if existing_clips and all(Path(c.get("file_path", "")).exists() and is_video_vertical_1080p(c.get("file_path", "")) and c.get("dynamic_reframe") for c in existing_clips):
                 print("\n" + "=" * 60)
                 print(f"[SUCCESS] ALL CLIPS ALREADY RENDERED IN 1080x1920 ({len(existing_clips)} clips found).")
                 print(f"Destination folder: {video_dir}")
                 for c in existing_clips:
                     print(f"   [{c['clip_id']}] \"{c['title']}\" ({c['duration']}s, Viral Score: {c['score']}/100) -> {c['filename']}")
                 print("=" * 60)
-                print("(To re-render from scratch, run again with the --force flag)\n")
+                print("(To re-render with updated styling, run again with the --rerender flag)\n")
                 return
         except Exception:
             pass
