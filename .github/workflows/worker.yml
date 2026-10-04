@@ -52,9 +52,8 @@ jobs:
       - name: Write YouTube Cookies file (if provided)
         env:
           YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
-        if: env.YOUTUBE_COOKIES != ''
         run: |
-          printf "%s" "$YOUTUBE_COOKIES" > worker/cookies.txt
+          python -c 'import os; c = os.environ.get("YOUTUBE_COOKIES", "").strip(); open("worker/cookies.txt", "w", encoding="utf-8").write(c) if c else None'
 
       - name: Run Clipping Worker
         env:

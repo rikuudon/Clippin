@@ -112,7 +112,7 @@ def download_youtube_video(url: str, output_dir: Path, cookies_file: str = None)
         "quiet": False,
         "no_warnings": False,
         "remote_components": ["ejs:github"],
-        "js_runtimes": {"deno": {}},
+        "js_runtimes": {"node": {}, "deno": {}},
     }
     if effective_cookie_file:
         base_opts["cookiefile"] = effective_cookie_file
@@ -613,7 +613,7 @@ def main():
             extract_opts = {
                 "quiet": True,
                 "remote_components": ["ejs:github"],
-                "js_runtimes": {"deno": {}},
+                "js_runtimes": {"node": {}, "deno": {}},
                 "extractor_args": {"youtube": {"player_client": ["android", "ios"]}},
             }
             if cookie_file:
